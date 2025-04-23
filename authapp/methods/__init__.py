@@ -1,1 +1,11 @@
-from .auth import regis, login, auth_one, auth_two, change_password, delete_profile, update_profile, profile, logout, register
+from .auth import (
+    register,
+    login,
+    logout,
+    profile,
+    update_profile,
+    delete_profile,
+    change_password,
+    auth_one,
+    auth_two,
+)
