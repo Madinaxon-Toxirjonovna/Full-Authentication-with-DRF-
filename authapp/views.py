@@ -1,227 +1,191 @@
-from django.shortcuts import render
+import datetime
+import random
+import re
+import uuid
+from methodism import METHODISM, custom_response, MESSAGE
+from rest_framework import status, permissions
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from .models import CustomUser
-from rest_framework.authtoken.models import Token
-from django.contrib.auth import authenticate
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.authentication import TokenAuthentication
-from rest_framework import status
-import random
-import string
-import uuid
-from .models import OTP
-import datetime
-from methodism import METHODISM
+from django.contrib.auth import authenticate, login, logout
+
+from .methods.helper import send_code
+from .models import OTP, CustomUser
+from .serializers import UserSerializer, RegisterSerializer, LoginSerializer
 from authapp import methods
+
 
 class Main(METHODISM):
     file = methods
-    token_key = 'Token'
-    not_auth_methods = ['regis', 'login', 'auth_one', 'auth_two']
-
-class RegisterView(APIView):
-    def post(self, request, *args, **kwargs):
-        data = request.data
-        if "key" not in data or "password" not in data:
-            return Response({
-                "Error": "Phone yoki password kiritilmagan"
-            })
-        
+    token_key = "Token"
+    not_auth_methods = ['register', 'login']
 
 
-        if (len(data['password']) < 6 or ' ' in data['password'] or not data['password'].isalnum() or len([i for i in data['password'] if i.isalpha() and i.isupper()]) < 1 or len([i for i in data['password'] if i.isalpha() and i.islower()]) < 1):
-            return Response({
-             "Error": "Password xato kiritildi"
-                })
-
-      
-        otp = OTP.objects.filter(key=data['key']).first()
-        phone = CustomUser.objects.filter(phone=otp.phone).first()
-       
-        if phone:
-            return Response({
-                "Error": "Bu raqamdan avval ro'yhatdan o'tilgan"
-            })
-        user_data = {
-            'phone': otp.phone,
-            'password': data['password'],
-            'name': data.get('name', '')
-        }
-        if data.get('key', '') == '123':
-            user_data.update({
-                'is_active': True,
-                'is_staff': True,
-                'is_superuser': True
-            })
-        user = CustomUser.objects.create_user(**user_data)
-        token = Token.objects.create(user=user)
-        return Response({
-            "message": "Siz muvaffaqiyatli ro'yxatdan o'tdingiz",
-            "Token": token.key
-        })
-
-class LoginView(APIView):
+class RegisterAPIView(APIView):
     def post(self, request):
-        data = request.data
+        serializer = RegisterSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Muvaffaqiyatli ro'yxatdan o'tdingiz"}, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+from rest_framework.authtoken.models import Token
+
+class LoginAPIView(APIView):
+    def post(self, request):
+
+        data = request.data
+        
         user = CustomUser.objects.filter(phone=data['phone']).first()
         if not user:
-            return Response({
-                "Error": "Bu telefon raqam orqali ro'yxatdan o'tilmagan"
-            })
-        
+            return custom_response(False, message=MESSAGE['UserPasswordError'])
         if not user.check_password(data['password']):
-            return Response({
-                "Error": "Xato parol kiritdingiz"
+            return ({
+                "Error": "Xato password kiritingiz"
             })
-        
-      
-        token = Token.objects.get_or_create(user=user)
+        serializer = LoginSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.validated_data['user']
+            login(request, user)
+            token, created = Token.objects.get_or_create(user=user)
+            return Response({
+                "message": "Muvaffaqiyatli kirildi!",
+                "token": token.key
+            }, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        return Response({
-            "Message": "Siz tizimga kirdingiz",
-            "Token": token[0].key
-        })
-    
-class LogoOutView(APIView):
-    permission_classes = [IsAuthenticated],
-    authentication_classes = TokenAuthentication,
+
+
+
+class LogoutAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        token = Token.objects.filter(user=request.user).first()
-        token.delete()
-        return Response({
-            "Message": "Siz tizimdan chiqdingiz"
-        })
-    
-class Profile(APIView):
-    permission_classes = IsAuthenticated,
-    authentication_classes = TokenAuthentication,
+        logout(request)
+        return Response({"message": "Muvaffaqiyatli chiqildi"}, status=status.HTTP_200_OK)
+
+
+class ProfileAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        return Response({
-            "data": user.format()
-        })
-    
+        serializer = UserSerializer(user)
+        return Response(serializer.data)
+
+
+class ProfileUpdateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def put(self, request):
+        user = request.user
+        serializer = UserSerializer(user, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Ma'lumotlar to'liq yangilandi"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
     def patch(self, request):
-        user_ = request.user  
-        data = request.data
-        
-        if data["phone"]:
-            user = CustomUser.objects.filter(phone=data['phone']).first()
-            if int(user_.phone) == data['phone']:
-                return Response({
-                    "Error": "Bu sizning raqamingiz(tellni almashtirmoqchi bo'lmasangiz tell raqamingizni yubormang)"
-                })
-            if user:
-                return Response({
-                    "Error": "Bu telefon raqam orqali oldin ro'yxatdan o'tilgan"
-                })
+        user = request.user
+        serializer = UserSerializer(user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Ma'lumotlar qisman yangilandi"}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        user_.name = data.get('name', user_.name)
-        user_.phone = data.get('phone', user_.phone)
-        user_.save()
+class ProfileDeleteAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
-        return Response({
-            "Message": f"{' '.join([i for i in data])} malumotlaringiz o'zgardi"    
-        })
-    
     def delete(self, request):
         user = request.user
         user.delete()
-        return Response({
-            "Message": "Profilingiz o'chirildi"
-        })
-    
-class ChangePassword(APIView):
-    permission_classes = [IsAuthenticated],
-    authentication_classes = TokenAuthentication,
+        return Response({"message": "Akkount o'chirildi"}, status=status.HTTP_200_OK)
+
+
+class ChangePasswordView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
     def post(self, request):
-        data = request.data
+
         user = request.user
+        old = request.data.get("old")
+        new = request.data.get("new")
+        confirm = request.data.get("confirm")
 
-        if not data['new'] or not data['old']:
-            return Response({
-                "Error": "Datada kamchilik bor"
-            })
-        
-        if data['new'] == data['old']:
-            return Response({
-                "Error": "Parolingizni qayta o'rnatish mumkin emas"
-            })
+        if not user.check_password(old):
+            return Response({"error": "Hozirgi parolni to'g'ri kiriting."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if not user.check_password(data.get('old', '')):
-            return Response({
-                "error": "Siz oldingi parolingizni xato kiritdingiz"
-            }, status=status.HTTP_400_BAD_REQUEST)
+        if new != confirm:
+            return Response({"error": "New password va confirm password mos kelmadi."}, status=status.HTTP_400_BAD_REQUEST)
 
-        user.set_password(data.get('new', ''))
+        if old == new:
+            return Response({"error": "hozirgi password va yangi password bir xil bolishi mumkin emas."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(new)
         user.save()
 
-        return Response({
-            "message": "Sizning parolingiz o'zgartirildi"
-        }, status=status.HTTP_200_OK)
+        return Response({"success": "Password muvaffaqiyatli o'zgartirildi."}, status=status.HTTP_200_OK)
+
+EMAIL_REGEX = re.compile(r'^[\w\.-]+@[\w\.-]+\.\w+$')
 
 class AuthOne(APIView):
     def post(self, request):
         data = request.data
-
+        email = data.get('email')
         phone = data.get('phone')
-        if not phone:
-            return Response({"Error": "To'g'ri ma'lumot kiritilmagan"})
+        if not email and not phone:
+            return Response({'error': "Kamida telefon yoki email kiriting"}, status=400)
 
-        if len(str(phone)) != 12 or not str(phone).startswith('998') or not str(phone).isdigit():
-            return Response({"Error": "Telefon raqam noto'g'ri kiritildi"})
+        if not data['phone']:
+            return Response({
+                'error': "To'g'ri malumot kiritilmagan"
+            })
 
-        code = ''.join([str(random.randint(1, 9)) for _ in range(4)])
+        if len(str(data['phone'])) != 12 or not isinstance(data['phone'], int) or str(data['phone'])[:3] != '998':
+            return Response({
+                'error': "Telefon raqami noto'g'ri kiritildi"
+            })
+
+        is_email = isinstance(email, str) and EMAIL_REGEX.match(email)
+        is_phone = isinstance(phone, int) or (isinstance(phone, str) and phone.isdigit())
+
+        if email and not is_email:
+            return Response({'error': "Email formati noto‘g‘ri"}, status=400)
+
+        code = ''.join([str(random.randint(1,9999))[-1] for _ in range(4)])
         key = uuid.uuid4().__str__() + code
+        # send_to_mail(request, 'maxmudovamadinaxon27@gmail.com', int(code))
 
-        otp = OTP.objects.create(phone=phone, key=key, code=code)
+        if is_email:
+            send_code(email, code)
+
+        if is_phone:
+            send_code(phone, code)
+        otp = OTP.objects.create(phone=data['phone'], key=key)
 
         return Response({
-            "otp": code,  
-            "token": otp.key
+            'otp': code,
+            'token': otp.key
         })
+
 
 class AuthTwo(APIView):
     def post(self, request):
         data = request.data
-        key = data.get('key')
-        code = data.get('code')
-
-        if not key or not code:
-            return Response({"Error": "To'liq ma'lumot kiritilmadi"})
-
-        otp = OTP.objects.filter(key=key).first()
+        if not data['code'] or not data['key']:
+            return Response({
+                "error": "Siz to'liq malumot kiritmadingiz"
+            })
+        otp = OTP.objects.filter(key=data['key']).first()
 
         if not otp:
-            return Response({"Error": "Xato key"})
+            return Response({
+                "Error": "Xato key"
+            })
 
-        now = datetime.datetime.now(datetime.timezone.utc)
-
-        if (now - otp.created).total_seconds() >= 180:
-            otp.is_expire = True
-            otp.save()
-            return Response({"Error": "Kod eskirgan"})
-
-        if otp.is_conf:
-            return Response({"Error": "Kod allaqachon tasdiqlangan"})
-
-        if otp.is_expire:
-            return Response({"Error": "Kod yaroqsiz (expire)"})
-
-        if otp.code != str(code):
-            otp.tried += 1
-            otp.save()
-            return Response({"Error": "Xato kod"})
-
-        otp.is_conf = True
-        otp.save()
-
-        user = CustomUser.objects.filter(phone=otp.phone).first()
-
+        now = datetime.datetime.now()
         return Response({
-            "registrated": user is not None
-        })
+            "message": True
+            })

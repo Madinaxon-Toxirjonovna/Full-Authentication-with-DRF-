@@ -1,7 +1,7 @@
 from rest_framework import serializers
-from .models import Post
+from product.models import Noutbooks
 
-class PostSerializers(serializers.ModelSerializer):
+class NoutbooksSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Post
-        fields = '__all__'  
+        model = Noutbooks
+        fields = '__all__'

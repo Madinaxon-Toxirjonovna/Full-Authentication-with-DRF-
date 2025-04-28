@@ -1,152 +1,120 @@
-from datetime import datetime, timezone
+import datetime
+import random
 import uuid
-from random import randint
-from authapp.models import CustomUser, OTP
+from methodism import custom_response, MESSAGE
+from rest_framework import permissions
+from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
-from methodism import custom_response, error_messages, MESSAGE
+from rest_framework.response import Response
+from authapp.models import CustomUser, OTP
+from authapp.serializers import LoginSerializer, UserSerializer, RegisterSerializer
 
 
 def register(request, params):
-    key = params.get("key")
-    password = params.get("password")
-
-    if not key:
-        return custom_response(False, error_messages.error_params_unfilled("key"))
-    if not password:
-        return custom_response(False, error_messages.error_params_unfilled("password"))
-
-    if (len(password) < 6 or ' ' in password or not password.isalnum()
-            or not any(c.isupper() for c in password)
-            or not any(c.islower() for c in password)):
-        return custom_response(False, message=MESSAGE["PasswordError"])
-
-    otp = OTP.objects.filter(key=key).first()
-    if not otp:
-        return custom_response(False, message=MESSAGE["OTPNotFound"])
-    if CustomUser.objects.filter(phone=otp.phone).exists():
-        return custom_response(False, message=MESSAGE["UserAlreadyExists"])
-
-    user_data = {
-        "phone": otp.phone,
-        "password": password,
-        "name": params.get("name", "")
-    }
-
-    if key == "123":  # Maxsus developer kalit
-        user_data.update(is_active=True, is_staff=True, is_superuser=True)
-
-    user = CustomUser.objects.create_user(**user_data)
-    token = Token.objects.create(user=user)
-
-    return custom_response(True, data={"token": token.key}, message=MESSAGE["Registered"])
-
+    serializer = RegisterSerializer(data=params)
+    if serializer.is_valid():
+        serializer.save()
+        return custom_response({"message": "Muvaffaqiyatli ro'yxatdan o'tdingiz"})
+    return {
+        "bu register": "register"}
 
 def login(request, params):
-    phone = params.get("phone")
-    password = params.get("password")
+    user = CustomUser.objects.filter(phone=params['phone']).first()
+    if not user:
+        return custom_response(False, message=MESSAGE['UserPasswordError'])
+    if not user.check_password(params['password']):
+        return ({
+           "Error": "Xato password kiritingiz"
+        })
 
-    if not phone:
-        return custom_response(False, error_messages.error_params_unfilled("phone"))
-    if not password:
-        return custom_response(False, error_messages.error_params_unfilled("password"))
-
-    user = CustomUser.objects.filter(phone=phone).first()
-    if not user or not user.check_password(password):
-        return custom_response(False, message=MESSAGE["Unauthenticated"])
-
-    token, _ = Token.objects.get_or_create(user=user)
-    return custom_response(True, data={"token": token.key}, message=MESSAGE["Login"])
-
+    serializer = LoginSerializer(data=params)
+    if serializer.is_valid():
+        user = serializer.validated_data['user']
+        login(request, user)
+        token, created = Token.objects.get_or_create(user=user)
+        return Response({
+            "message": "Muvaffaqiyatli kirildi!",
+            "token": token.key
+        })
 
 def logout(request, params):
-    Token.objects.filter(user=request.user).delete()
-    return custom_response(True, message=MESSAGE["Logout"])
+    token = Token.objects.filter(user=request.user).first()
+    if token:
+        token.delete()
+        return custom_response(True, message=MESSAGE['LogOut'])
 
-
-def profile(request, params):
-    return custom_response(True, data=request.user.format())
-
-
-def update_profile(request, params):
+def get_profile(request, params):
     user = request.user
-    phone = params.get("phone")
-    name = params.get("name")
+    serializer = UserSerializer(user)
+    return Response(serializer.data)
 
-    if phone:
-        if CustomUser.objects.filter(phone=phone).exclude(id=user.id).exists():
-            return custom_response(False, message=MESSAGE["PhoneAlreadyUsed"])
-        user.phone = phone
-    if name:
-        user.name = name
+def profile_update(request, params):
+    user = request.user
+    serializer = UserSerializer(user, data=params)
+    if serializer.is_valid():
+        serializer.save()
+        return custom_response({"message": "Ma'lumotlar to'liq yangilandi"})
 
-    user.save()
-    return custom_response(True, message=MESSAGE["ProfileUpdated"])
-
-
-def delete_profile(request, params):
-    request.user.delete()
-    return custom_response(True, message=MESSAGE["ProfileDeleted"])
-
+def profile_delete(request, params):
+    user = request.user
+    user.delete()
+    return custom_response({"message": "Akkount o'chirildi"})
 
 def change_password(request, params):
-    old = params.get("old")
-    new = params.get("new")
+    permission_classes = [permissions.IsAuthenticated]
+    authentication_classes = [TokenAuthentication]
+    user = request.user
+    old = request.data.get("old")
+    new = request.data.get("new")
+    confirm = request.data.get("confirm")
 
-    if not old or not new:
-        return custom_response(False, message=MESSAGE["MissingPassword"])
+    if not user.check_password(old):
+        return custom_response({"error": "Hozirgi parolni to'g'ri kiriting."})
+
+    if new != confirm:
+        return custom_response({"error": "New password va confirm password mos kelmadi."})
     if old == new:
-        return custom_response(False, message=MESSAGE["PasswordSame"])
-    if not request.user.check_password(old):
-        return custom_response(False, message=MESSAGE["WrongOldPassword"])
+        return custom_response({"error": "hozirgi password va yangi password bir xil bolishi mumkin emas."})
 
-    request.user.set_password(new)
-    request.user.save()
-    return custom_response(True, message=MESSAGE["PasswordChanged"])
+    user.set_password(new)
+    user.save()
 
+    return custom_response({"success": "Password muvaffaqiyatli o'zgartirildi."})
 
-def auth_one(request, params):
-    phone = params.get("phone")
-    if not phone:
-        return custom_response(False, message=MESSAGE["PhoneRequired"])
-    if len(str(phone)) != 12 or not str(phone).startswith("998") or not str(phone).isdigit():
-        return custom_response(False, message=MESSAGE["InvalidPhone"])
+def authone(request, params):
+    data = params
+    if not data['phone']:
+        return custom_response({
+            'error': "To'g'ri malumot kiritilmagan"
+        })
 
-    code = ''.join([str(randint(1, 9)) for _ in range(4)])
-    key = str(uuid.uuid4()) + code
-    otp = OTP.objects.create(phone=phone, key=key, code=code)
+    if len(str(data['phone'])) != 12 or not isinstance(data['phone'], int) or str(data['phone'])[:3] != '998':
+        return custom_response({
+            'error': "Telefon raqami noto'g'ri kiritildi"
+        })
 
-    return custom_response(True, data={"otp": code, "token": otp.key}, message=MESSAGE["CodeSent"])
+    code = ''.join([str(random.randint(1, 9999))[-1] for _ in range(4)])
+    key = uuid.uuid4().__str__() + code
+    otp = OTP.objects.create(phone=data['phone'], key=key)
 
+    return Response({
+        'otp': code,
+        'token': otp.key
+    })
 
-def auth_two(request, params):
-    key = params.get("key")
-    code = params.get("code")
-
-    if not key or not code:
-        return custom_response(False, message=MESSAGE["MissingKeyCode"])
-
-    otp = OTP.objects.filter(key=key).first()
+def authtwo(request, params):
+    data = params
+    if not data['code'] or not data['key']:
+        return custom_response({
+            "error": "Siz to'liq malumot kiritmadingiz"
+        })
+    otp = OTP.objects.filter(key=data['key']).first()
     if not otp:
-        return custom_response(False, message=MESSAGE["OTPNotFound"])
+        return custom_response({
+            "Error": "Xato key"
+        })
 
-    if otp.is_conf:
-        return custom_response(False, message=MESSAGE["AlreadyConfirmed"])
-    if otp.is_expire:
-        return custom_response(False, message=MESSAGE["CodeExpired"])
-
-    now = datetime.now(timezone.utc)
-    if (now - otp.created).total_seconds() > 180:
-        otp.is_expire = True
-        otp.save()
-        return custom_response(False, message=MESSAGE["CodeExpired"])
-
-    if otp.code != str(code):
-        otp.tried += 1
-        otp.save()
-        return custom_response(False, message=MESSAGE["WrongCode"])
-
-    otp.is_conf = True
-    otp.save()
-
-    is_registered = CustomUser.objects.filter(phone=otp.phone).exists()
-    return custom_response(True, data={"registered": is_registered}, message=MESSAGE["CodeConfirmed"])
+    now = datetime.datetime.now()
+    return Response({
+        "message": True
+    })
