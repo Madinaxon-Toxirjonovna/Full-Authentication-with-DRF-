@@ -1,0 +1,6 @@
+asgiref
+Django
+djangorestframework
+drf-yasg
+methodism
+python-dotenv

@@ -1,4 +1,4 @@
-#!/home/madinaxon/Desktop/Najot/TEST_AUTH/.venv/bin/python3
+#!/home/madinaxon/Desktop/Najot/Full-Authentication-with-DRF-/.venv/bin/python3
 # -*- coding: utf-8 -*-
 import re
 import sys
